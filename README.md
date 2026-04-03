@@ -1,117 +1,119 @@
 # iCondo Tennis Court Booking Bot
 
-Automatically books tennis courts at Sky Everton via the iCondo resident portal. Designed to run at midnight when new slots are released.
+Automatically books tennis courts at 7 PM or 8 PM at Sky Everton via direct API calls to iCondo. Designed to fire at midnight the instant new slots are released.
 
-## Setup
+## Why Direct API Calls?
 
-### 1. Install dependencies
+iCondo is mobile-app only — no web portal to automate. This bot intercepts the app's API calls once, then uses those same endpoints directly. Direct HTTP calls are **~100x faster** than browser/app automation, giving you the best chance of grabbing slots before anyone else.
 
-```bash
-python -m venv venv
-source venv/bin/activate   # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
-playwright install chromium
-```
+## Setup (3 Steps)
 
-### 2. Configure credentials
+### Step 1: Capture the API endpoints (one-time)
 
-```bash
-cp .env.example .env
-# Edit .env with your iCondo login and preferences
-```
-
-### 3. Discover the page structure (required first run)
-
-Since iCondo has no public API, you need to run the interceptor once to see how the site works. This opens a real browser — log in and navigate through the booking flow manually:
+You need to intercept the iCondo app's network traffic to discover the API endpoints. The easiest methods:
 
 ```bash
 python intercept.py
 ```
 
-This will:
-- Open a browser to `resident.icondo.asia`
-- Log all API calls to `logs/network_*.json`
-- Print key API endpoints it finds
+This will guide you through setting up a proxy. The recommended approaches:
 
-After running this, check the screenshots and logs, then update the CSS selectors in `bot.py` if the defaults don't match the actual page structure.
+| Method | Difficulty | Notes |
+|--------|-----------|-------|
+| **HTTP Toolkit** | Easiest | Auto-configures Android, no cert hassle |
+| **Charles Proxy** | Easy | GUI-based, good for Mac/Windows |
+| **mitmproxy** | Medium | CLI, this script automates it |
 
-### 4. Test the bot (dry run)
+**What to do:**
+1. Set up the proxy on your computer
+2. Point your phone's WiFi proxy to your computer
+3. Open the iCondo app and do a full booking flow (login → select tennis court → pick date/time → book)
+4. Save the captured traffic
+
+Then generate the config:
 
 ```bash
+python parse_capture.py logs/api_capture_*.json
+```
+
+This creates `api_endpoints.json` with the exact endpoints, auth flow, and request formats.
+
+### Step 2: Configure credentials
+
+```bash
+cp .env.example .env
+# Edit .env with your iCondo email and password
+```
+
+### Step 3: Test it
+
+```bash
+# Dry run — goes through the flow without actually booking
 python bot.py --dry-run
 ```
 
-This goes through the full flow without clicking the final confirm button. Check `screenshots/` for visual proof of each step.
-
-### 5. Run for real
+## Usage
 
 ```bash
-# Book for the default date (today + DAYS_AHEAD)
+# Book for the default date (today + 14 days)
 python bot.py
 
 # Book for a specific date
 python bot.py --date 2025-02-01
 
-# Wait until midnight, then book immediately
+# Wait until midnight, then book instantly
 python bot.py --wait-midnight
+
+# Dry run (no actual booking)
+python bot.py --dry-run
 ```
 
-## Automated Scheduling
+## Automated Midnight Scheduling
 
-### Option A: Persistent scheduler (simplest)
+Courts are released at midnight. The bot logs in and looks up the facility *before* midnight, then fires the booking request the instant the clock hits 00:00.
+
+### Option A: Persistent scheduler
 
 ```bash
-python scheduler.py
+python scheduler.py          # Runs every midnight
+python scheduler.py --once   # Next midnight only
 ```
-
-Runs continuously, booking at each midnight.
 
 ### Option B: Cron job
 
 ```bash
-python scheduler.py --cron   # Shows crontab setup instructions
-```
-
-### Option C: One-shot (next midnight only)
-
-```bash
-python scheduler.py --once
+python scheduler.py --cron   # Prints crontab/systemd setup instructions
 ```
 
 ## How It Works
 
-1. **Pre-midnight**: The bot logs into iCondo ~30s before midnight and navigates to the booking page
-2. **At midnight**: It immediately selects the target date and preferred time slot (7 PM first, then 8 PM as fallback)
-3. **Confirmation**: It clicks the confirm/book button and saves screenshots as proof
-4. **Retries**: If booking fails, it retries up to `MAX_RETRIES` times
+```
+23:59:50  Bot starts, logs into iCondo API, caches facility ID
+23:59:59  Waits for midnight...
+00:00:00  GET /slots → finds 7PM available → POST /bookings → DONE
+```
+
+Total booking time after midnight: **< 1 second** (vs 5-10 seconds with browser automation).
 
 ## File Structure
 
 ```
-├── bot.py           # Main booking automation
-├── scheduler.py     # Midnight scheduling (cron, systemd, or persistent)
-├── intercept.py     # Network interceptor for discovering API endpoints
-├── .env.example     # Configuration template
-├── .env             # Your credentials (git-ignored)
-├── requirements.txt # Python dependencies
-├── screenshots/     # Booking proof screenshots (git-ignored)
-└── logs/            # Execution logs (git-ignored)
+├── bot.py                    # Main booking bot (direct API calls)
+├── scheduler.py              # Midnight scheduling
+├── intercept.py              # Proxy-based API interceptor
+├── parse_capture.py          # Converts captured traffic → api_endpoints.json
+├── api_endpoints.json        # API config (generated, git-ignored)
+├── api_endpoints.example.json # Example API config for reference
+├── .env                      # Your credentials (git-ignored)
+├── .env.example              # Credential template
+├── requirements.txt          # Python dependencies
+└── logs/                     # Execution logs (git-ignored)
 ```
-
-## Customizing Selectors
-
-The bot uses generic CSS selectors that should work with most iCondo portal layouts. If they don't match your portal, update the selector lists in these functions in `bot.py`:
-
-- `login()` — email, password, and submit button selectors
-- `navigate_to_booking()` — navigation menu selectors
-- `select_facility()` — facility name matching
-- `select_date()` — calendar/date picker selectors
-- `select_time_slot()` — time slot display format
-- `confirm_booking()` — confirmation button selectors
 
 ## Troubleshooting
 
-- **Screenshots**: Check `screenshots/` after each run for visual debugging
-- **Logs**: Check `logs/` for detailed execution logs
-- **Selectors not matching**: Run `intercept.py` to see the actual page structure
-- **Login fails**: Verify credentials in `.env`; iCondo may use OTP — if so, you'll need to handle that manually or add OTP support
+- **"api_endpoints.json not found"**: Run `intercept.py` + `parse_capture.py` first
+- **Login fails**: Check credentials in `.env`; the app may use OTP — check the captured login flow
+- **Token expired**: The bot logs in fresh each run, so tokens shouldn't expire
+- **Slots show as unavailable**: They may genuinely be taken — try running closer to midnight
+- **SSL errors during interception**: Make sure the proxy CA cert is installed on your phone

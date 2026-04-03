@@ -1,43 +1,45 @@
 """
 iCondo Tennis Court Booking Bot
 ================================
-Automates booking of tennis courts at Sky Everton via the iCondo resident portal.
+Books tennis courts at Sky Everton via direct API calls to iCondo.
+Much faster than browser automation — critical when slots are released at midnight.
 
 Usage:
-    python bot.py              # Book for the furthest available date
-    python bot.py --date 2025-01-15  # Book for a specific date
-    python bot.py --dry-run    # Run without actually confirming the booking
+    python bot.py                      # Book for the furthest available date
+    python bot.py --date 2025-01-15    # Book for a specific date
+    python bot.py --dry-run            # Show what would be booked without confirming
+    python bot.py --wait-midnight      # Wait until midnight, then book instantly
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
 import time
+import urllib.request
+import urllib.error
+import urllib.parse
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 load_dotenv()
 
 # ── Configuration ──────────────────────────────────────────────────────────────
 
-ICONDO_URL = "https://resident.icondo.asia"
 EMAIL = os.getenv("ICONDO_EMAIL", "")
 PASSWORD = os.getenv("ICONDO_PASSWORD", "")
 PREFERRED_TIMES = os.getenv("PREFERRED_TIMES", "19:00,20:00").split(",")
 FACILITY_NAME = os.getenv("FACILITY_NAME", "Tennis Court")
 DAYS_AHEAD = int(os.getenv("DAYS_AHEAD", "14"))
-HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 RETRY_DELAY_MS = int(os.getenv("RETRY_DELAY_MS", "500"))
 
-SCREENSHOT_DIR = "screenshots"
+ENDPOINTS_FILE = "api_endpoints.json"
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 
 os.makedirs("logs", exist_ok=True)
-os.makedirs(SCREENSHOT_DIR, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -52,371 +54,343 @@ logging.basicConfig(
 log = logging.getLogger("icondo-bot")
 
 
-def screenshot(page, name):
-    """Save a screenshot for debugging."""
-    path = os.path.join(SCREENSHOT_DIR, f"{name}_{datetime.now().strftime('%H%M%S')}.png")
-    page.screenshot(path=path, full_page=True)
-    log.info(f"Screenshot saved: {path}")
+# ── API Client ─────────────────────────────────────────────────────────────────
+
+
+class ICondoAPI:
+    """Direct API client for iCondo — no browser needed."""
+
+    def __init__(self, endpoints_config):
+        self.config = endpoints_config
+        self.base_url = endpoints_config.get("api_base_url", "")
+        self.endpoints = endpoints_config.get("endpoints", {})
+        self.token = None
+        self.headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": (
+                "iCondo/3.0.0 (iPhone; iOS 17.0; Scale/3.00)"
+            ),
+        }
+
+    def _request(self, method, url, body=None):
+        """Make an HTTP request and return parsed JSON response."""
+        headers = dict(self.headers)
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+
+        data = None
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                response_body = resp.read().decode("utf-8")
+                try:
+                    return json.loads(response_body)
+                except json.JSONDecodeError:
+                    return {"raw": response_body}
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8", errors="replace")
+            log.error(f"HTTP {e.code}: {method} {url}")
+            log.error(f"Response: {error_body[:500]}")
+            raise
+        except urllib.error.URLError as e:
+            log.error(f"Connection error: {method} {url} — {e.reason}")
+            raise
+
+    def login(self, email, password):
+        """Authenticate and store the session token."""
+        endpoint = self.endpoints.get("login", {})
+        url = endpoint.get("url", f"{self.base_url}/auth/login")
+        method = endpoint.get("method", "POST")
+
+        # Build login body from template or defaults
+        body_template = endpoint.get("body_template", {})
+        body = dict(body_template) if body_template else {}
+
+        # Fill in credentials — try common field names
+        credential_fields = {
+            "email": email,
+            "username": email,
+            "user_email": email,
+            "password": password,
+            "user_password": password,
+        }
+        if body:
+            for key in body:
+                if key.lower() in credential_fields:
+                    body[key] = credential_fields[key.lower()]
+        else:
+            body = {"email": email, "password": password}
+
+        log.info(f"Logging in as {email}...")
+        resp = self._request(method, url, body)
+
+        # Extract token from response
+        token_path = self.config.get("auth", {}).get("token_path", "")
+        self.token = self._extract_token(resp, token_path)
+
+        if not self.token:
+            # Try common token locations
+            for path in [
+                "token",
+                "access_token",
+                "accessToken",
+                "data.token",
+                "data.access_token",
+                "data.accessToken",
+                "result.token",
+            ]:
+                self.token = self._extract_token(resp, path)
+                if self.token:
+                    break
+
+        if self.token:
+            log.info(f"Login successful (token: {self.token[:20]}...)")
+        else:
+            log.warning(
+                "Login response received but could not extract token. "
+                "Check api_endpoints.json auth.token_path"
+            )
+            log.debug(f"Response: {json.dumps(resp)[:300]}")
+
+        return resp
+
+    def _extract_token(self, data, path):
+        """Extract a value from nested dict using dot notation path."""
+        if not path or not isinstance(data, dict):
+            return None
+        # Strip leading "response." if present
+        path = path.removeprefix("response.")
+        parts = path.split(".")
+        current = data
+        for part in parts:
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                return None
+        return current if isinstance(current, str) else None
+
+    def get_facilities(self):
+        """Get list of available facilities."""
+        endpoint = self.endpoints.get("facilities", {})
+        url = endpoint.get("url", f"{self.base_url}/facilities")
+        method = endpoint.get("method", "GET")
+
+        log.info("Fetching facilities...")
+        resp = self._request(method, url)
+
+        # Handle various response formats
+        if isinstance(resp, list):
+            return resp
+        if isinstance(resp, dict):
+            for key in ["data", "facilities", "result", "results", "items"]:
+                if key in resp and isinstance(resp[key], list):
+                    return resp[key]
+        return [resp]
+
+    def find_facility_id(self, facility_name):
+        """Find the facility ID for a given name."""
+        facilities = self.get_facilities()
+
+        for facility in facilities:
+            if not isinstance(facility, dict):
+                continue
+            name = facility.get("name", "") or facility.get("title", "") or ""
+            if facility_name.lower() in name.lower():
+                fid = (
+                    facility.get("id")
+                    or facility.get("facility_id")
+                    or facility.get("facilityId")
+                )
+                log.info(f"Found facility: {name} (id={fid})")
+                return fid
+
+        available = [
+            f.get("name", f.get("title", "?"))
+            for f in facilities
+            if isinstance(f, dict)
+        ]
+        raise RuntimeError(
+            f"Facility '{facility_name}' not found. Available: {available}"
+        )
+
+    def get_available_slots(self, facility_id, date):
+        """Get available time slots for a facility on a given date."""
+        endpoint = self.endpoints.get("available_slots", {})
+        url = endpoint.get("url", f"{self.base_url}/facilities/{facility_id}/slots")
+        method = endpoint.get("method", "GET")
+        date_str = date.strftime("%Y-%m-%d")
+
+        # Replace path parameters
+        url = url.replace("{facility_id}", str(facility_id))
+        url = url.replace("{date}", date_str)
+
+        if method == "GET":
+            # Add date as query parameter
+            separator = "&" if "?" in url else "?"
+            if date_str not in url:
+                url = f"{url}{separator}date={date_str}"
+            log.info(f"Fetching slots: {url}")
+            resp = self._request(method, url)
+        else:
+            params = endpoint.get("params_template", {})
+            body = dict(params) if params else {}
+            # Fill in facility_id and date
+            for key in body:
+                kl = key.lower()
+                if "facility" in kl or "id" in kl:
+                    body[key] = facility_id
+                if "date" in kl:
+                    body[key] = date_str
+            if not body:
+                body = {"facility_id": facility_id, "date": date_str}
+            log.info(f"Fetching slots: {method} {url}")
+            resp = self._request(method, url, body)
+
+        # Parse slots from response
+        if isinstance(resp, list):
+            return resp
+        if isinstance(resp, dict):
+            for key in [
+                "data",
+                "slots",
+                "timeslots",
+                "time_slots",
+                "available",
+                "result",
+                "results",
+            ]:
+                if key in resp and isinstance(resp[key], list):
+                    return resp[key]
+        return [resp]
+
+    def create_booking(self, facility_id, date, time_slot):
+        """Create a booking for the given facility, date, and time."""
+        endpoint = self.endpoints.get("create_booking", {})
+        url = endpoint.get("url", f"{self.base_url}/bookings")
+        method = endpoint.get("method", "POST")
+        date_str = date.strftime("%Y-%m-%d")
+
+        # Replace path parameters
+        url = url.replace("{facility_id}", str(facility_id))
+
+        # Build request body from template or defaults
+        body_template = endpoint.get("body_template", {})
+        body = dict(body_template) if body_template else {}
+
+        if body:
+            # Fill template values
+            for key in body:
+                kl = key.lower()
+                if "facility" in kl or kl == "id":
+                    body[key] = facility_id
+                elif "date" in kl:
+                    body[key] = date_str
+                elif "time" in kl or "slot" in kl:
+                    body[key] = time_slot
+        else:
+            body = {
+                "facility_id": facility_id,
+                "date": date_str,
+                "time_slot": time_slot,
+            }
+
+        log.info(f"Creating booking: {method} {url}")
+        log.info(f"  Body: {json.dumps(body)}")
+        return self._request(method, url, body)
+
+
+# ── Booking Logic ──────────────────────────────────────────────────────────────
+
+
+def load_endpoints():
+    """Load API endpoint configuration."""
+    if not os.path.exists(ENDPOINTS_FILE):
+        log.error(f"{ENDPOINTS_FILE} not found!")
+        log.error("Run intercept.py first to capture iCondo's API endpoints,")
+        log.error("then run parse_capture.py to generate this file.")
+        sys.exit(1)
+
+    with open(ENDPOINTS_FILE) as f:
+        return json.load(f)
+
+
+def find_best_slot(slots, preferred_times):
+    """Find the best available slot matching preferred times."""
+    for preferred in preferred_times:
+        hour = int(preferred.split(":")[0])
+        minute = int(preferred.split(":")[1]) if ":" in preferred else 0
+
+        # Generate time string variants to match against
+        variants = [
+            preferred,                              # 19:00
+            f"{hour}:{minute:02d}",                 # 19:00
+            f"{hour % 12 or 12}:{minute:02d} PM",   # 7:00 PM
+            f"{hour % 12 or 12}:{minute:02d}PM",    # 7:00PM
+            f"{hour % 12 or 12}:{minute:02d} pm",   # 7:00 pm
+            f"{hour % 12 or 12}pm",                 # 7pm
+            f"{hour % 12 or 12}.{minute:02d} PM",   # 7.00 PM
+            f"{hour:02d}:{minute:02d}",             # 19:00
+            f"{hour:02d}{minute:02d}",              # 1900
+        ]
+
+        for slot in slots:
+            if not isinstance(slot, dict):
+                continue
+
+            # Check if slot is available
+            status = (
+                slot.get("status", "")
+                or slot.get("availability", "")
+                or slot.get("state", "")
+            ).lower()
+            if status in ("booked", "unavailable", "reserved", "full", "disabled"):
+                continue
+
+            is_available = slot.get("available", slot.get("is_available", True))
+            if is_available is False or is_available == 0:
+                continue
+
+            # Match time
+            slot_time = (
+                slot.get("time", "")
+                or slot.get("start_time", "")
+                or slot.get("startTime", "")
+                or slot.get("time_slot", "")
+                or slot.get("slot", "")
+                or slot.get("label", "")
+                or str(slot.get("hour", ""))
+            )
+
+            slot_time_str = str(slot_time).strip()
+            for variant in variants:
+                if variant.lower() in slot_time_str.lower() or slot_time_str == variant:
+                    log.info(f"Found matching slot: {slot_time_str} (matched '{variant}')")
+                    return slot
+
+    return None
 
 
 def wait_until_midnight():
-    """Sleep until just before midnight (23:59:59.500) to start booking at 00:00."""
+    """Sleep until just before midnight to start booking at 00:00:00."""
     now = datetime.now()
-    midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    wait_seconds = (midnight - now).total_seconds() - 0.5  # Start 500ms before midnight
+    midnight = (now + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    # Start 200ms before midnight (API calls are fast, no browser overhead)
+    wait_seconds = (midnight - now).total_seconds() - 0.2
     if wait_seconds > 0:
         log.info(f"Waiting {wait_seconds:.1f}s until midnight...")
         time.sleep(wait_seconds)
-
-
-def login(page):
-    """Log in to iCondo resident portal."""
-    log.info(f"Navigating to {ICONDO_URL}")
-    page.goto(ICONDO_URL, wait_until="networkidle")
-    screenshot(page, "01_login_page")
-
-    # Try common login form selectors
-    # NOTE: You may need to update these selectors after running intercept.py
-    email_selectors = [
-        'input[type="email"]',
-        'input[name="email"]',
-        'input[name="username"]',
-        'input[placeholder*="email" i]',
-        'input[placeholder*="user" i]',
-        "#email",
-        "#username",
-    ]
-
-    password_selectors = [
-        'input[type="password"]',
-        'input[name="password"]',
-        "#password",
-    ]
-
-    submit_selectors = [
-        'button[type="submit"]',
-        'input[type="submit"]',
-        'button:has-text("Login")',
-        'button:has-text("Log In")',
-        'button:has-text("Sign In")',
-        'a:has-text("Login")',
-    ]
-
-    email_input = None
-    for selector in email_selectors:
-        try:
-            el = page.wait_for_selector(selector, timeout=3000)
-            if el:
-                email_input = el
-                log.info(f"Found email input: {selector}")
-                break
-        except PlaywrightTimeout:
-            continue
-
-    if not email_input:
-        screenshot(page, "01_no_email_field")
-        raise RuntimeError(
-            "Could not find email/username field. "
-            "Run intercept.py first to inspect the login page, "
-            "then update the selectors in bot.py."
-        )
-
-    password_input = None
-    for selector in password_selectors:
-        try:
-            el = page.wait_for_selector(selector, timeout=3000)
-            if el:
-                password_input = el
-                log.info(f"Found password input: {selector}")
-                break
-        except PlaywrightTimeout:
-            continue
-
-    if not password_input:
-        screenshot(page, "01_no_password_field")
-        raise RuntimeError("Could not find password field.")
-
-    # Fill credentials
-    email_input.fill(EMAIL)
-    password_input.fill(PASSWORD)
-    screenshot(page, "02_credentials_filled")
-
-    # Submit
-    for selector in submit_selectors:
-        try:
-            btn = page.wait_for_selector(selector, timeout=2000)
-            if btn:
-                log.info(f"Clicking submit: {selector}")
-                btn.click()
-                break
-        except PlaywrightTimeout:
-            continue
-
-    # Wait for navigation after login
-    page.wait_for_load_state("networkidle", timeout=15000)
-    time.sleep(2)
-    screenshot(page, "03_after_login")
-    log.info("Login completed")
-
-
-def navigate_to_booking(page):
-    """Navigate to the facility booking section."""
-    # Try common navigation patterns for facility booking
-    booking_selectors = [
-        'a:has-text("Facility")',
-        'a:has-text("Booking")',
-        'a:has-text("Book")',
-        'button:has-text("Facility")',
-        'button:has-text("Booking")',
-        '[href*="facility"]',
-        '[href*="booking"]',
-        'text=Facility Booking',
-        'text=Book Facility',
-        'text=Facilities',
-    ]
-
-    for selector in booking_selectors:
-        try:
-            el = page.wait_for_selector(selector, timeout=3000)
-            if el and el.is_visible():
-                log.info(f"Found booking nav: {selector}")
-                el.click()
-                page.wait_for_load_state("networkidle", timeout=10000)
-                time.sleep(1)
-                screenshot(page, "04_booking_page")
-                return
-        except PlaywrightTimeout:
-            continue
-
-    screenshot(page, "04_no_booking_nav")
-    raise RuntimeError(
-        "Could not find facility booking navigation. "
-        "Run intercept.py to inspect the page structure."
-    )
-
-
-def select_facility(page):
-    """Select the tennis court facility."""
-    facility_selectors = [
-        f'text="{FACILITY_NAME}"',
-        f'text={FACILITY_NAME}',
-        f'a:has-text("{FACILITY_NAME}")',
-        f'button:has-text("{FACILITY_NAME}")',
-        f'div:has-text("{FACILITY_NAME}")',
-        'text="Tennis"',
-        'text=Tennis',
-    ]
-
-    for selector in facility_selectors:
-        try:
-            el = page.wait_for_selector(selector, timeout=3000)
-            if el and el.is_visible():
-                log.info(f"Found facility: {selector}")
-                el.click()
-                page.wait_for_load_state("networkidle", timeout=10000)
-                time.sleep(1)
-                screenshot(page, "05_facility_selected")
-                return
-        except PlaywrightTimeout:
-            continue
-
-    screenshot(page, "05_no_facility")
-    raise RuntimeError(
-        f"Could not find '{FACILITY_NAME}'. "
-        "Check the facility name in your .env file."
-    )
-
-
-def select_date(page, target_date):
-    """Navigate to and select the target booking date."""
-    date_str = target_date.strftime("%Y-%m-%d")
-    day_num = target_date.day
-    log.info(f"Selecting date: {date_str} (day {day_num})")
-
-    # Try clicking on a date picker or calendar
-    date_selectors = [
-        f'[data-date="{date_str}"]',
-        f'td:has-text("{day_num}")',
-        f'div[class*="day"]:has-text("{day_num}")',
-        f'button:has-text("{day_num}")',
-        f'a:has-text("{day_num}")',
-    ]
-
-    # May need to navigate forward in the calendar first
-    next_month_selectors = [
-        'button[class*="next"]',
-        'a[class*="next"]',
-        '[aria-label="Next month"]',
-        'button:has-text(">")',
-        'button:has-text("›")',
-        '.fc-next-button',
-    ]
-
-    # Check if we need to navigate months
-    today = datetime.now()
-    months_ahead = (target_date.year - today.year) * 12 + (target_date.month - today.month)
-
-    for _ in range(months_ahead):
-        for selector in next_month_selectors:
-            try:
-                btn = page.wait_for_selector(selector, timeout=2000)
-                if btn and btn.is_visible():
-                    btn.click()
-                    time.sleep(0.5)
-                    break
-            except PlaywrightTimeout:
-                continue
-
-    # Now select the date
-    for selector in date_selectors:
-        try:
-            elements = page.query_selector_all(selector)
-            for el in elements:
-                text = el.inner_text().strip()
-                if text == str(day_num):
-                    log.info(f"Clicking date element: {selector}")
-                    el.click()
-                    page.wait_for_load_state("networkidle", timeout=10000)
-                    time.sleep(1)
-                    screenshot(page, "06_date_selected")
-                    return
-        except Exception:
-            continue
-
-    screenshot(page, "06_no_date")
-    raise RuntimeError(
-        f"Could not select date {date_str}. "
-        "The calendar structure may differ from expected."
-    )
-
-
-def select_time_slot(page):
-    """Select preferred time slot (7pm or 8pm)."""
-    for preferred_time in PREFERRED_TIMES:
-        # Normalize time display variants
-        hour = int(preferred_time.split(":")[0])
-        time_variants = [
-            preferred_time,                          # 19:00
-            f"{hour}:00",                            # 19:00
-            f"{hour % 12 or 12}:00 PM",              # 7:00 PM
-            f"{hour % 12 or 12}:00PM",               # 7:00PM
-            f"{hour % 12 or 12}pm",                  # 7pm
-            f"{hour % 12 or 12}:00 pm",              # 7:00 pm
-            f"{hour % 12 or 12}.00 PM",              # 7.00 PM
-            f"{hour}00",                             # 1900
-        ]
-
-        log.info(f"Looking for time slot: {preferred_time} (variants: {time_variants[:3]}...)")
-
-        for variant in time_variants:
-            selectors = [
-                f'text="{variant}"',
-                f'button:has-text("{variant}")',
-                f'a:has-text("{variant}")',
-                f'td:has-text("{variant}")',
-                f'div[class*="slot"]:has-text("{variant}")',
-                f'div[class*="time"]:has-text("{variant}")',
-            ]
-
-            for selector in selectors:
-                try:
-                    el = page.wait_for_selector(selector, timeout=1500)
-                    if el and el.is_visible():
-                        # Check it's not already booked
-                        parent = el.evaluate(
-                            "el => el.closest('[class*=\"booked\"], [class*=\"unavailable\"], [class*=\"disabled\"]')"
-                        )
-                        if parent:
-                            log.info(f"Slot {variant} is unavailable, trying next...")
-                            break
-
-                        log.info(f"Found available slot: {variant}")
-                        el.click()
-                        time.sleep(1)
-                        screenshot(page, "07_time_selected")
-                        return preferred_time
-                except PlaywrightTimeout:
-                    continue
-
-    screenshot(page, "07_no_time_slot")
-    raise RuntimeError(
-        f"No preferred time slots ({PREFERRED_TIMES}) available. "
-        "They may already be booked."
-    )
-
-
-def confirm_booking(page, dry_run=False):
-    """Confirm the booking."""
-    confirm_selectors = [
-        'button:has-text("Confirm")',
-        'button:has-text("Book")',
-        'button:has-text("Submit")',
-        'button:has-text("Reserve")',
-        'a:has-text("Confirm")',
-        'input[type="submit"]',
-    ]
-
-    for selector in confirm_selectors:
-        try:
-            el = page.wait_for_selector(selector, timeout=3000)
-            if el and el.is_visible():
-                screenshot(page, "08_before_confirm")
-
-                if dry_run:
-                    log.info(f"DRY RUN: Would click confirm button: {selector}")
-                    return True
-
-                log.info(f"Clicking confirm: {selector}")
-                el.click()
-                page.wait_for_load_state("networkidle", timeout=10000)
-                time.sleep(2)
-                screenshot(page, "09_after_confirm")
-
-                # Check for success indicators
-                success_indicators = [
-                    'text="Success"',
-                    'text="Confirmed"',
-                    'text="Booked"',
-                    'text="successfully"',
-                    '[class*="success"]',
-                ]
-                for indicator in success_indicators:
-                    try:
-                        if page.wait_for_selector(indicator, timeout=3000):
-                            log.info("Booking confirmed successfully!")
-                            return True
-                    except PlaywrightTimeout:
-                        continue
-
-                # If no success indicator found, assume success if no error
-                log.info("Booking submitted (no explicit success message detected)")
-                return True
-        except PlaywrightTimeout:
-            continue
-
-    # Sometimes there's a second confirmation (Are you sure?)
-    try:
-        dialog_confirm = page.wait_for_selector(
-            'button:has-text("Yes"), button:has-text("OK"), button:has-text("Confirm")',
-            timeout=3000,
-        )
-        if dialog_confirm:
-            if dry_run:
-                log.info("DRY RUN: Would confirm dialog")
-                return True
-            dialog_confirm.click()
-            time.sleep(2)
-            screenshot(page, "09_dialog_confirmed")
-            return True
-    except PlaywrightTimeout:
-        pass
-
-    screenshot(page, "08_no_confirm")
-    raise RuntimeError("Could not find confirmation button.")
+    log.info(f"GO! Current time: {datetime.now().strftime('%H:%M:%S.%f')}")
 
 
 def run_booking(target_date=None, dry_run=False, wait_for_midnight=False):
-    """Main booking flow."""
+    """Main booking flow using direct API calls."""
     if not EMAIL or not PASSWORD:
         log.error("Set ICONDO_EMAIL and ICONDO_PASSWORD in your .env file")
         sys.exit(1)
@@ -425,61 +399,86 @@ def run_booking(target_date=None, dry_run=False, wait_for_midnight=False):
         target_date = datetime.now() + timedelta(days=DAYS_AHEAD)
 
     log.info("=" * 60)
-    log.info("iCondo Tennis Court Booking Bot")
+    log.info("iCondo Tennis Court Booking Bot (API Mode)")
     log.info("=" * 60)
-    log.info(f"Target date: {target_date.strftime('%Y-%m-%d (%A)')}")
+    log.info(f"Target date:     {target_date.strftime('%Y-%m-%d (%A)')}")
     log.info(f"Preferred times: {PREFERRED_TIMES}")
-    log.info(f"Facility: {FACILITY_NAME}")
-    log.info(f"Headless: {HEADLESS}")
-    log.info(f"Dry run: {dry_run}")
+    log.info(f"Facility:        {FACILITY_NAME}")
+    log.info(f"Dry run:         {dry_run}")
 
+    endpoints = load_endpoints()
+    api = ICondoAPI(endpoints)
+
+    # Step 1: Login (do this BEFORE midnight so we're authenticated and ready)
+    api.login(EMAIL, PASSWORD)
+
+    # Step 2: Find facility ID (cache this so it's instant at midnight)
+    facility_id = api.find_facility_id(FACILITY_NAME)
+    log.info(f"Facility ID: {facility_id}")
+
+    # Step 3: Wait for midnight if requested
     if wait_for_midnight:
         wait_until_midnight()
 
+    # Step 4: Book with retries
     for attempt in range(1, MAX_RETRIES + 1):
         log.info(f"\n--- Attempt {attempt}/{MAX_RETRIES} ---")
         try:
-            with sync_playwright() as p:
-                browser = p.chromium.launch(
-                    headless=HEADLESS,
-                    args=["--disable-blink-features=AutomationControlled"],
-                )
-                context = browser.new_context(
-                    viewport={"width": 1280, "height": 800},
-                    user_agent=(
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0.0.0 Safari/537.36"
-                    ),
-                )
-                page = context.new_page()
+            # Get available slots
+            start_time = time.time()
+            slots = api.get_available_slots(facility_id, target_date)
+            elapsed = (time.time() - start_time) * 1000
+            log.info(f"Got {len(slots)} slots in {elapsed:.0f}ms")
 
-                login(page)
-                navigate_to_booking(page)
-                select_facility(page)
-                select_date(page, target_date)
-                booked_time = select_time_slot(page)
-                confirm_booking(page, dry_run=dry_run)
+            # Find preferred slot
+            slot = find_best_slot(slots, PREFERRED_TIMES)
+            if not slot:
+                log.warning(f"No preferred slots available. All slots: ")
+                for s in slots[:10]:
+                    log.warning(f"  {s}")
+                if attempt < MAX_RETRIES:
+                    time.sleep(RETRY_DELAY_MS / 1000)
+                    continue
+                raise RuntimeError("No preferred time slots available")
 
-                log.info("=" * 60)
-                log.info(
-                    f"{'[DRY RUN] ' if dry_run else ''}"
-                    f"Booked {FACILITY_NAME} on "
-                    f"{target_date.strftime('%Y-%m-%d')} at {booked_time}"
-                )
-                log.info("=" * 60)
+            # Extract time slot identifier
+            slot_time = (
+                slot.get("time")
+                or slot.get("start_time")
+                or slot.get("startTime")
+                or slot.get("time_slot")
+                or slot.get("slot")
+                or slot.get("id")
+            )
 
-                browser.close()
+            if dry_run:
+                log.info(f"DRY RUN: Would book {FACILITY_NAME} on "
+                         f"{target_date.strftime('%Y-%m-%d')} at {slot_time}")
+                log.info(f"Slot details: {json.dumps(slot)}")
                 return True
 
+            # Create booking
+            start_time = time.time()
+            result = api.create_booking(facility_id, target_date, slot_time)
+            elapsed = (time.time() - start_time) * 1000
+            log.info(f"Booking response in {elapsed:.0f}ms: {json.dumps(result)[:300]}")
+
+            log.info("=" * 60)
+            log.info(
+                f"BOOKED: {FACILITY_NAME} on "
+                f"{target_date.strftime('%Y-%m-%d')} at {slot_time}"
+            )
+            log.info("=" * 60)
+            return True
+
+        except urllib.error.HTTPError as e:
+            log.error(f"Attempt {attempt} failed: HTTP {e.code}")
+            if attempt < MAX_RETRIES:
+                delay = RETRY_DELAY_MS / 1000
+                log.info(f"Retrying in {delay}s...")
+                time.sleep(delay)
         except Exception as e:
             log.error(f"Attempt {attempt} failed: {e}")
-            screenshot_name = f"error_attempt_{attempt}"
-            try:
-                screenshot(page, screenshot_name)
-            except Exception:
-                pass
-
             if attempt < MAX_RETRIES:
                 delay = RETRY_DELAY_MS / 1000
                 log.info(f"Retrying in {delay}s...")
@@ -499,7 +498,7 @@ def main():
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Run without actually confirming the booking",
+        help="Show what would be booked without confirming",
     )
     parser.add_argument(
         "--wait-midnight",

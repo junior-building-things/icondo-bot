@@ -6,3 +6,4 @@ screenshots/
 logs/
 .venv/
 venv/
+api_endpoints.json

@@ -18,6 +18,8 @@ from datetime import datetime, timedelta
 
 from bot import run_booking
 
+os.makedirs("logs", exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -42,11 +44,11 @@ def seconds_until_midnight():
 
 def pre_midnight_launch():
     """
-    Start the bot ~30 seconds before midnight.
-    The bot will log in and be ready, then attempt booking right at midnight.
+    Start the bot ~10 seconds before midnight.
+    Login + facility lookup happen before midnight.
+    Slot fetch + booking fires right at midnight.
     """
-    # Wait until 30 seconds before midnight
-    wait_secs = seconds_until_midnight() - 30
+    wait_secs = seconds_until_midnight() - 10
     if wait_secs > 0:
         log.info(
             f"Next booking attempt at midnight. "
@@ -67,7 +69,6 @@ def pre_midnight_launch():
 
 def run_scheduler():
     """Run the booking bot every night at midnight."""
-    os.makedirs("logs", exist_ok=True)
     log.info("=" * 60)
     log.info("iCondo Booking Scheduler Started")
     log.info("=" * 60)
@@ -79,7 +80,7 @@ def run_scheduler():
         except Exception as e:
             log.error(f"Scheduler error: {e}")
 
-        # Sleep a bit to avoid double-runs, then loop back to wait for next midnight
+        # Sleep a bit to avoid double-runs, then loop back
         log.info("Sleeping 60s before re-entering wait loop...")
         time.sleep(60)
 
@@ -94,7 +95,7 @@ def print_cron_instructions():
     print("Cron Setup Instructions")
     print("=" * 60)
     print()
-    print("Option 1: Run at 23:59:30 (bot waits for midnight internally)")
+    print("Option 1: Run at 23:59:50 (bot logs in, then books at midnight)")
     print(f"  59 23 * * * cd {script_dir} && {python_path} bot.py --wait-midnight")
     print()
     print("Option 2: Run exactly at midnight")
@@ -114,7 +115,6 @@ Create /etc/systemd/system/icondo-bot.service:
   Type=oneshot
   WorkingDirectory={script_dir}
   ExecStart={python_path} bot.py --wait-midnight
-  Environment=DISPLAY=:0
 
   [Install]
   WantedBy=multi-user.target
@@ -124,7 +124,7 @@ Create /etc/systemd/system/icondo-bot.timer:
   Description=Run iCondo bot before midnight
 
   [Timer]
-  OnCalendar=*-*-* 23:59:30
+  OnCalendar=*-*-* 23:59:50
   Persistent=true
 
   [Install]
@@ -152,8 +152,6 @@ def main():
     if args.cron:
         print_cron_instructions()
         return
-
-    os.makedirs("logs", exist_ok=True)
 
     if args.once:
         log.info("Single run mode: will book at next midnight and exit.")
