@@ -1,0 +1,33 @@
+{
+  "api_base_url": "https://api.icondo.asia/api",
+  "auth": {
+    "token_path": "data.token"
+  },
+  "endpoints": {
+    "login": {
+      "method": "POST",
+      "url": "https://api.icondo.asia/api/auth/login",
+      "body_template": {
+        "email": "",
+        "password": ""
+      }
+    },
+    "facilities": {
+      "method": "GET",
+      "url": "https://api.icondo.asia/api/facilities"
+    },
+    "available_slots": {
+      "method": "GET",
+      "url": "https://api.icondo.asia/api/facilities/{facility_id}/slots?date={date}"
+    },
+    "create_booking": {
+      "method": "POST",
+      "url": "https://api.icondo.asia/api/bookings",
+      "body_template": {
+        "facility_id": "",
+        "date": "",
+        "time_slot": ""
+      }
+    }
+  }
+}
