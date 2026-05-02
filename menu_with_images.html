@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Micro Bread & Co. — Menu</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700&family=Inter:wght@300;400;500;600&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: #1a1510;
+    color: #f0e6d6;
+    min-height: 100vh;
+  }
+
+  header {
+    text-align: center;
+    padding: 60px 20px 30px;
+    border-bottom: 1px solid rgba(212, 180, 131, 0.2);
+  }
+
+  header h1 {
+    font-family: 'Playfair Display', serif;
+    font-size: 3rem;
+    letter-spacing: 6px;
+    text-transform: uppercase;
+    color: #e8d5b7;
+  }
+
+  header p {
+    font-size: 0.85rem;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: #a09080;
+    margin-top: 8px;
+  }
+
+  .section-title {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.5rem;
+    text-align: center;
+    padding: 40px 20px 20px;
+    color: #c4a97d;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+
+  .menu-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 10px 24px 40px;
+  }
+
+  .card {
+    background: #252017;
+    border-radius: 16px;
+    overflow: hidden;
+    border: 1px solid rgba(212, 180, 131, 0.1);
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+
+  .card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+  }
+
+  .card-img {
+    width: 100%;
+    height: 220px;
+    object-fit: cover;
+    display: block;
+    background: linear-gradient(135deg, #3a2e1f 0%, #2a2218 100%);
+  }
+
+  .card-img-placeholder {
+    width: 100%;
+    height: 220px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 4rem;
+    background: linear-gradient(135deg, #3a2e1f 0%, #2a2218 100%);
+  }
+
+  .card-body {
+    padding: 20px;
+  }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 8px;
+  }
+
+  .card-name {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #e8d5b7;
+    flex: 1;
+    margin-right: 12px;
+  }
+
+  .card-tag {
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 1px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    flex-shrink: 0;
+    margin-left: 4px;
+  }
+
+  .tag-v { background: #2d4a2d; color: #8bc48b; }
+  .tag-vg { background: #1e4a3a; color: #6bc4a4; }
+  .tag-s { background: #4a3a1e; color: #c4a46b; }
+
+  .card-price {
+    font-size: 1.3rem;
+    font-weight: 600;
+    color: #c4a97d;
+    flex-shrink: 0;
+  }
+
+  .card-desc {
+    font-size: 0.85rem;
+    color: #9a8a78;
+    line-height: 1.5;
+    font-weight: 300;
+  }
+
+  .addons-section {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 10px 24px 60px;
+  }
+
+  .addon-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid rgba(212, 180, 131, 0.08);
+    font-size: 0.95rem;
+  }
+
+  .addon-row span:last-child {
+    color: #c4a97d;
+    font-weight: 500;
+  }
+
+  .footer {
+    text-align: center;
+    padding: 30px;
+    font-size: 0.75rem;
+    color: #6a5a4a;
+    letter-spacing: 1px;
+  }
+
+  .loading-spinner {
+    display: none;
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(212,180,131,0.2);
+    border-top-color: #c4a97d;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Micro</h1>
+  <p>Bread & Co.</p>
+</header>
+
+<div class="section-title">Entrées</div>
+<div class="menu-grid">
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-1">🍳</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Baker's Breakfast</span>
+        <span class="card-price">$28</span>
+      </div>
+      <p class="card-desc">Pork sausage · scrambled free range eggs · roasted mushrooms · fresh tomato · brie with hot honey · herb butter · sourdough</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-2">🐟</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Smoked Salmon Tartine</span>
+        <span class="card-price">$23</span>
+      </div>
+      <p class="card-desc">Tzatziki · cucumber · alfalfa · pomegranate · horseradish</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-3">🍅</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Tomato Tartine <span class="card-tag tag-v">V</span></span>
+        <span class="card-price">$17</span>
+      </div>
+      <p class="card-desc">Tomato on vine · cherry tomatoes · ricotta · basil</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-4">🥑</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Avocado Tartine <span class="card-tag tag-v">V</span></span>
+        <span class="card-price">$19</span>
+      </div>
+      <p class="card-desc">Edamame · beetroot · feta · pickled shallot · radish · zaatar</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-5">🥚</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Slow Cooked Eggs & Toast</span>
+        <span class="card-price">$16</span>
+      </div>
+      <p class="card-desc">Onion soubise · bacon bits · kailan</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-6">🫕</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Shakshuka <span class="card-tag tag-v">V</span></span>
+        <span class="card-price">$18</span>
+      </div>
+      <p class="card-desc">Baked eggs · crunchy chickpea · tomato · bell pepper · salsa verde · sourdough</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-7">🍆</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Brinjal Flatbread <span class="card-tag tag-vg">VG</span></span>
+        <span class="card-price">$18</span>
+      </div>
+      <p class="card-desc">Cashew cream · pistachio · dukkah · citrus</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-8">🥪</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Breakfast Sando</span>
+        <span class="card-price">$16</span>
+      </div>
+      <p class="card-desc">Spam · scrambled free range eggs · tomato · relish · chipotle mayo · milk toast</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-9">🧀</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Grilled 4 Cheese Sandwich <span class="card-tag tag-v">V</span></span>
+        <span class="card-price">$16</span>
+      </div>
+      <p class="card-desc">Raclette · smoked ricotta · mozzarella · cheddar · tomato jam</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-10">🧀</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Grilled 4 Cheese with Kimchi</span>
+        <span class="card-price">$18</span>
+      </div>
+      <p class="card-desc">Raclette · smoked ricotta · mozzarella · cheddar · sauerkraut · tomato jam</p>
+    </div>
+  </div>
+
+</div>
+
+<div class="section-title">Small Bites / Toast</div>
+<div class="menu-grid">
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-11">🍍</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Ricotta & Pineapple Toast <span class="card-tag tag-v">V</span> <span class="card-tag tag-s">Seasonal</span></span>
+        <span class="card-price">$13</span>
+      </div>
+      <p class="card-desc">Pickled pineapple · pineapple jam · toasted almond · pepper berry sea salt · mint</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-12">🥜</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">House Nut Butter Toast <span class="card-tag tag-v">V</span></span>
+        <span class="card-price">$9</span>
+      </div>
+      <p class="card-desc">Almond · hazelnut · sunflower seeds · honey</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-13">🥣</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Granola <span class="card-tag tag-v">V</span></span>
+        <span class="card-price">$12</span>
+      </div>
+      <p class="card-desc">Cocoa granola · yoghurt · fresh fruits · honey</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-img-placeholder" id="img-14">🍞</div>
+    <div class="card-body">
+      <div class="card-header">
+        <span class="card-name">Build-Your-Own Bread & Butter Plate</span>
+        <span class="card-price">$8</span>
+      </div>
+      <p class="card-desc">Two slices sourdough · butter</p>
+    </div>
+  </div>
+
+</div>
+
+<div class="section-title">Add-ons</div>
+<div class="addons-section">
+  <div class="addon-row"><span>Scrambled Free Range Eggs</span><span>$6</span></div>
+  <div class="addon-row"><span>Sunny Side</span><span>$5</span></div>
+  <div class="addon-row"><span>Avocado</span><span>$4</span></div>
+  <div class="addon-row"><span>Mushroom</span><span>$5</span></div>
+  <div class="addon-row"><span>Burrata</span><span>$8</span></div>
+  <div class="addon-row"><span>Pork Sausage</span><span>$7</span></div>
+  <div class="addon-row"><span>Homemade Jam</span><span>$1</span></div>
+</div>
+
+<div class="footer">
+  V — Vegetarian &nbsp;&nbsp;/&nbsp;&nbsp; VG — Vegan &nbsp;&nbsp;|&nbsp;&nbsp; Prices are GST inclusive
+</div>
+
+<script>
+// Auto-fetch real food images when opened in a browser with internet access.
+// Uses Google's favicon/image proxy as a last resort, or direct Unsplash embed URLs.
+const imageSearches = {
+  'img-1':  'full english breakfast sausage eggs mushrooms sourdough',
+  'img-2':  'smoked salmon tartine open sandwich tzatziki',
+  'img-3':  'tomato ricotta tartine bruschetta basil',
+  'img-4':  'avocado toast feta beetroot edamame',
+  'img-5':  'slow cooked eggs toast bacon',
+  'img-6':  'shakshuka baked eggs tomato sourdough',
+  'img-7':  'eggplant flatbread dukkah cashew cream',
+  'img-8':  'spam egg breakfast sandwich sando',
+  'img-9':  'grilled four cheese sandwich melted',
+  'img-10': 'kimchi grilled cheese sandwich',
+  'img-11': 'ricotta pineapple toast almond',
+  'img-12': 'nut butter toast almond hazelnut honey',
+  'img-13': 'cocoa granola bowl yoghurt fruits honey',
+  'img-14': 'sourdough bread butter plate artisan',
+};
+
+// Recipe page URLs with known good food images (from web search results)
+const recipeLinks = {
+  'img-1':  'https://iamafoodblog.com/a-breakdown-of-the-full-english-breakfast/',
+  'img-2':  'https://chezlerevefrancais.com/smoked-salmon-tartines/',
+  'img-3':  'https://emilylaurae.com/roasted-tomato-and-ricotta-tartine/',
+  'img-4':  'https://www.delscookingtwist.com/simple-beet-avocado-toast/',
+  'img-5':  'https://simply-delicious-food.com/bacon-egg-creamed-spinach-breakfast-toast/',
+  'img-6':  'https://www.recipetineats.com/shakshuka-baked-eggs/',
+  'img-7':  'https://thesidesmith.com/eggplant-baked-slices-salad/',
+  'img-8':  'https://toasttohome.com/spam-and-eggs-sandwich/',
+  'img-9':  'https://petitporcini.com/raclette-grilled-cheese-sandwich/',
+  'img-10': 'https://www.halfbakedharvest.com/kimchi-grilled-cheese/',
+  'img-11': 'https://www.howsweeteats.com/2017/06/roasted-pineapple-whipped-ricotta-toast-sea-salt/',
+  'img-12': 'https://www.acouplecooks.com/almond-butter-toast-with-strawberries-recipe/',
+  'img-13': 'https://www.jaroflemons.com/granola-breakfast-bowl/',
+  'img-14': 'https://www.theclevercarrot.com/2020/04/artisan-sourdough-bread-recipe/',
+};
+
+async function loadImages() {
+  for (const [id, query] of Object.entries(imageSearches)) {
+    const placeholder = document.getElementById(id);
+    if (!placeholder) continue;
+
+    const img = document.createElement('img');
+    img.className = 'card-img';
+    img.alt = query;
+    img.loading = 'lazy';
+
+    // Try Unsplash source (may still work for some users)
+    img.src = `https://source.unsplash.com/400x300/?${encodeURIComponent(query)}`;
+
+    img.onerror = function() {
+      // Fallback: keep the emoji placeholder
+      this.remove();
+    };
+
+    img.onload = function() {
+      placeholder.replaceWith(this);
+    };
+  }
+}
+
+// Run after page loads
+window.addEventListener('DOMContentLoaded', loadImages);
+</script>
+
+</body>
+</html>
